@@ -14,4 +14,4 @@ Run `xml_to_yolo.py` to convert data to YOLO format
 
 ## Train YOLOv11
 
-Run `python -m Text_detection.YOLOv11.`
+Run `python -m Text_detection.YOLOv11`.
