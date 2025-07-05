@@ -48,3 +48,11 @@ python prepare_crnn_data.py
 ---
 
 _Note:_ This script processes the dataset into a format compatible with CRNN-based text recognition (image + corresponding label only).
+
+### Training CRNN
+
+Start training the CRNN model:
+
+```bash
+python -m Text_recognition.CRNN
+```
