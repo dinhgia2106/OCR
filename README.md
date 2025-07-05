@@ -42,7 +42,7 @@ python -m Text_detection.YOLOv11
 Prepare image–text pairs for training:
 
 ```bash
-python text_recognition_data_preprocessing.py
+python prepare_crnn_data.py
 ```
 
 ---
