@@ -1,2 +1,9 @@
 /icdar2003
 /datasets
+yolo11*.pt
+*.pyc
+__pycache__/
+*.pkl
+*.pkl.gz
+*.json
+/runs
