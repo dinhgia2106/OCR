@@ -1,17 +1,50 @@
-# OCR system
+# OCR System Overview
 
 ## Datasets
 
-Install from [here](https://drive.google.com/file/d/1kUy2tuH-kKBlFCNA0a9sqD2TG4uyvBnV/view)
+**Download Dataset**
+Access and download the dataset from this [Google Drive link](https://drive.google.com/file/d/1kUy2tuH-kKBlFCNA0a9sqD2TG4uyvBnV/view).
 
-## Pipeline
+---
 
-Image -> text detection ('YOLO') -> text recognition ('CRNN') -> text
+## Processing Pipeline
 
-## Preprocessing
+```plaintext
+Input Image → Text Detection (YOLOv11) → Text Recognition (CRNN) → Final Text Output
+```
 
-Run `xml_to_yolo.py` to convert data to YOLO format
+---
 
-## Train YOLOv11
+## Phase 1: Text Detection
 
-Run `python -m Text_detection.YOLOv11`.
+### Preprocessing
+
+Convert XML annotations to YOLO format:
+
+```bash
+python xml_to_yolo.py
+```
+
+### Training YOLOv11
+
+Start training the YOLOv11 detection model:
+
+```bash
+python -m Text_detection.YOLOv11
+```
+
+---
+
+## Phase 2: Text Recognition
+
+### Preprocessing
+
+Prepare image–text pairs for training:
+
+```bash
+python text_recognition_data_preprocessing.py
+```
+
+---
+
+_Note:_ This script processes the dataset into a format compatible with CRNN-based text recognition (image + corresponding label only).
