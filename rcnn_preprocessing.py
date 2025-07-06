@@ -17,11 +17,34 @@ def load_data(root_dir):
     img_paths = []
     labels = []
     
-    # Read labels from text file
-    with open(os.path.join(root_dir, "labels.txt"), "r") as f:
-        for label in f:
-            labels.append(label.strip().split("\t")[1])
-            img_paths.append(label.strip().split("\t")[0])
+    # Try different encodings to handle Unicode issues
+    encodings_to_try = ['utf-8', 'utf-8-sig', 'windows-1252', 'iso-8859-1', 'latin-1']
+    
+    labels_file = os.path.join(root_dir, "labels.txt")
+    
+    for encoding in encodings_to_try:
+        try:
+            with open(labels_file, "r", encoding=encoding) as f:
+                for label in f:
+                    line = label.strip()
+                    if '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            img_path = parts[0]
+                            label_text = parts[1]
+                            # Filter out non-alphanumeric characters and normalize
+                            if label_text.replace(' ', '').isalnum():
+                                labels.append(label_text.lower())
+                                img_paths.append(img_path)
+            print(f"Successfully loaded data using {encoding} encoding")
+            break
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            print(f"Error with encoding {encoding}: {e}")
+            continue
+    else:
+        raise ValueError(f"Could not read {labels_file} with any of the attempted encodings: {encodings_to_try}")
     
     print(f"Total images: {len(img_paths)}")
     return img_paths, labels
@@ -139,8 +162,8 @@ def get_data_transforms():
             transforms.ColorJitter(
                 brightness=0.5,
                 contrast=0.5,
-                saturation=0.5,
-            ),
+                saturation=0.5, 
+            ),  # Randomly change the saturation, brightness, and contrast to avoid dependency on environment conditions
             transforms.Grayscale(num_output_channels=1),
             transforms.GaussianBlur(3),
             transforms.RandomAffine(
@@ -151,11 +174,11 @@ def get_data_transforms():
                 distortion_scale=0.3,
                 p=0.5,
                 interpolation=3,
-            ),
-            transforms.RandomRotation(degrees=2),
+            ),  # Randomly apply perspective transformation
+            transforms.RandomRotation(degrees=2), # Randomly rotate the image ±2 degrees
             transforms.ToTensor(),
-            transforms.Normalize((0.5,), (0.5,)),
-        ]),
+            transforms.Normalize((0.5,), (0.5,)), # Normalize to [-1, 1] range
+        ]), 
         "val": transforms.Compose([
             transforms.Resize((100, 420)),
             transforms.Grayscale(num_output_channels=1),
