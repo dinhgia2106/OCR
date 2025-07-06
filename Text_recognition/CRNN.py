@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.amp import autocast
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import timm
@@ -80,17 +80,15 @@ class CRNN(nn.Module):
         )
 
     def forward(self, x):
-        # Use autocast context manager inside the forward method
-        device_type = 'cuda' if x.is_cuda else 'cpu'
-        with autocast(device_type=device_type):
-            x = self.backbone(x)
-            x = x.permute(0, 3, 1, 2)
-            x = x.view(x.size(0), x.size(1), -1)  # Flatten the feature map
-            x = self.mapSeq(x)
-            x, _ = self.gru(x)
-            x = self.layer_norm(x)
-            x = self.out(x)
-            x = x.permute(1, 0, 2)  # Based on CTC
+        # Remove autocast from forward - it will be handled in training loop
+        x = self.backbone(x)
+        x = x.permute(0, 3, 1, 2)
+        x = x.view(x.size(0), x.size(1), -1)  # Flatten the feature map
+        x = self.mapSeq(x)
+        x, _ = self.gru(x)
+        x = self.layer_norm(x)
+        x = self.out(x)
+        x = x.permute(1, 0, 2)  # Based on CTC
 
         return x
 
@@ -181,7 +179,7 @@ def save_checkpoint(model, optimizer, epoch, train_losses, val_losses, save_dir,
 def fit(
     model, train_loader, val_loader, criterion, optimizer, scheduler, device, epochs,
     save_dir, vocab_size, char_to_idx, chars, hidden_size, n_layers, dropout_prob,
-    patience=7, save_every=10
+    scaler, patience=7, save_every=10
 ):
     """
     Train the model with early stopping and periodic saving.
@@ -202,6 +200,7 @@ def fit(
         hidden_size: Hidden size of the model
         n_layers: Number of layers
         dropout_prob: Dropout probability
+        scaler: GradScaler for mixed precision training
         patience: Early stopping patience
         save_every: Save checkpoint every N epochs
         
@@ -226,32 +225,33 @@ def fit(
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
         
         for idx, (inputs, labels, labels_len) in enumerate(train_pbar):
+            optimizer.zero_grad()
+            
             inputs = inputs.to(device)
             labels = labels.to(device)
             labels_len = labels_len.to(device)
 
-            optimizer.zero_grad()
+            with autocast():
+                outputs = model(inputs)
 
-            outputs = model(inputs)
+                logits_lens = torch.full(
+                    size=(outputs.size(1),),
+                    fill_value=outputs.size(0),
+                    dtype=torch.long,
+                ).to(device)
 
-            logits_lens = torch.full(
-                size=(outputs.size(1),),
-                fill_value=outputs.size(0),
-                dtype=torch.long,
-            ).to(device)
+                loss = criterion(outputs, labels, logits_lens, labels_len)
 
-            loss = criterion(outputs, labels, logits_lens, labels_len)
+            # Scale loss before backward
+            scaler.scale(loss).backward()
             
-            # Check for NaN loss
-            if torch.isnan(loss):
-                print(f"NaN loss detected at epoch {epoch + 1}, batch {idx}")
-                print("Skipping this batch...")
-                continue
-
-            loss.backward()
-            # Reduced gradient clipping threshold
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            # Unscale before gradient clipping
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            
+            # Step optimizer through scaler
+            scaler.step(optimizer)
+            scaler.update()
 
             batch_train_losses.append(loss.item())
             
@@ -261,20 +261,11 @@ def fit(
                 'avg_loss': sum(batch_train_losses) / len(batch_train_losses)
             })
 
-        if not batch_train_losses:  # Skip epoch if all batches had NaN
-            print(f"All batches in epoch {epoch + 1} had NaN loss. Stopping training.")
-            break
-            
         train_loss = sum(batch_train_losses) / len(batch_train_losses)
         train_losses.append(train_loss)
 
         val_loss = evaluate(model, val_loader, criterion, device)
         val_losses.append(val_loss)
-        
-        # Check for NaN validation loss
-        if torch.isnan(torch.tensor(val_loss)):
-            print(f"NaN validation loss at epoch {epoch + 1}. Stopping training.")
-            break
 
         # Update main progress bar
         epoch_pbar.set_postfix({
@@ -315,8 +306,7 @@ def fit(
             print(f"Best validation loss: {best_val_loss:.4f}")
             break
 
-        # Update scheduler with validation loss (for ReduceLROnPlateau)
-        scheduler.step(val_loss)
+        scheduler.step()
 
     return train_losses, val_losses
 
@@ -400,11 +390,11 @@ def main():
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(preprocessing_data)
     
-    # Model parameters - UPDATED
+    # Model parameters
     hidden_size = 256
-    n_layers = 2  # Reduced from 3 to 2
-    dropout_prob = 0.3  # Increased dropout
-    unfreeze_layers = 2  # Reduced from 3 to 2
+    n_layers = 3
+    dropout_prob = 0.2
+    unfreeze_layers = 3
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"Using device: {device}")
@@ -418,17 +408,20 @@ def main():
         unfreeze_layers=unfreeze_layers,
     ).to(device)
 
-    # Training parameters - UPDATED
+    # Training parameters
     epochs = 100
-    lr = 1e-4  # Reduced from 5e-4
-    weight_decay = 1e-4  # Increased regularization
-    scheduler_step_size = int(epochs * 0.3)  # Earlier decay
-    patience = 10  # Increased patience
-    save_every = 5  # More frequent saves
+    lr = 5e-5
+    weight_decay = 1e-5
+    scheduler_step_size = int(epochs * 0.5)
+    patience = 7
+    save_every = 10
 
     # Create save directory
     save_dir = "crnn"
     os.makedirs(save_dir, exist_ok=True)
+
+    # Initialize GradScaler for mixed precision training
+    scaler = GradScaler()
 
     # Loss, optimizer, and scheduler
     criterion = nn.CTCLoss(
@@ -440,18 +433,17 @@ def main():
         model.parameters(),
         lr=lr,
         weight_decay=weight_decay,
-        eps=1e-8,  # Added for numerical stability
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, verbose=True
-    )  # Changed to ReduceLROnPlateau
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=scheduler_step_size, gamma=0.1
+    )
 
     print("Starting training...")
     # Training with early stopping and periodic saving
     train_losses, val_losses = fit(
         model, train_loader, val_loader, criterion, optimizer, scheduler, device, epochs,
         save_dir, vocab_size, char_to_idx, chars, hidden_size, n_layers, dropout_prob,
-        patience=patience, save_every=save_every
+        scaler, patience=patience, save_every=save_every
     )
 
     # Evaluation
