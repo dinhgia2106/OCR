@@ -52,7 +52,7 @@ class CRNN(nn.Module):
     ):
         super(CRNN, self).__init__()
 
-        backbone = timm.create_model("resnet152", in_chans=1, pretrained=True)
+        backbone = timm.create_model("resnet152", in_chans=3, pretrained=True)
         modules = list(backbone.children())[:-2]
         modules.append(nn.AdaptiveAvgPool2d((1, None)))
         self.backbone = nn.Sequential(*modules)
@@ -243,7 +243,15 @@ def fit(
             loss = criterion(outputs, labels, logits_lens, labels_len)
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Reduced from 5
+            
+            # Check for NaN gradients
+            for name, param in model.named_parameters():
+                if param.grad is not None and torch.isnan(param.grad).any():
+                    print(f"NaN gradient detected in {name}")
+                    optimizer.zero_grad()
+                    continue
+            
             optimizer.step()
 
             batch_train_losses.append(loss.item())
@@ -401,9 +409,8 @@ def main():
         unfreeze_layers=unfreeze_layers,
     ).to(device)
 
-    # Training parameters
     epochs = 100
-    lr = 5e-4
+    lr = 5e-4  # Reduced from 5e-4
     weight_decay = 1e-5
     scheduler_step_size = int(epochs * 0.5)
     patience = 7
