@@ -52,7 +52,7 @@ class CRNN(nn.Module):
     ):
         super(CRNN, self).__init__()
 
-        backbone = timm.create_model("resnet152", in_chans=3, pretrained=True)
+        backbone = timm.create_model("resnet152", in_chans=1, pretrained=True)
         modules = list(backbone.children())[:-2]
         modules.append(nn.AdaptiveAvgPool2d((1, None)))
         self.backbone = nn.Sequential(*modules)
@@ -241,17 +241,16 @@ def fit(
             ).to(device)
 
             loss = criterion(outputs, labels, logits_lens, labels_len)
+            
+            # Check for NaN loss
+            if torch.isnan(loss):
+                print(f"NaN loss detected at epoch {epoch + 1}, batch {idx}")
+                print("Skipping this batch...")
+                continue
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Reduced from 5
-            
-            # Check for NaN gradients
-            for name, param in model.named_parameters():
-                if param.grad is not None and torch.isnan(param.grad).any():
-                    print(f"NaN gradient detected in {name}")
-                    optimizer.zero_grad()
-                    continue
-            
+            # Reduced gradient clipping threshold
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             batch_train_losses.append(loss.item())
@@ -262,11 +261,20 @@ def fit(
                 'avg_loss': sum(batch_train_losses) / len(batch_train_losses)
             })
 
+        if not batch_train_losses:  # Skip epoch if all batches had NaN
+            print(f"All batches in epoch {epoch + 1} had NaN loss. Stopping training.")
+            break
+            
         train_loss = sum(batch_train_losses) / len(batch_train_losses)
         train_losses.append(train_loss)
 
         val_loss = evaluate(model, val_loader, criterion, device)
         val_losses.append(val_loss)
+        
+        # Check for NaN validation loss
+        if torch.isnan(torch.tensor(val_loss)):
+            print(f"NaN validation loss at epoch {epoch + 1}. Stopping training.")
+            break
 
         # Update main progress bar
         epoch_pbar.set_postfix({
@@ -307,7 +315,8 @@ def fit(
             print(f"Best validation loss: {best_val_loss:.4f}")
             break
 
-        scheduler.step()
+        # Update scheduler with validation loss (for ReduceLROnPlateau)
+        scheduler.step(val_loss)
 
     return train_losses, val_losses
 
@@ -391,11 +400,11 @@ def main():
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(preprocessing_data)
     
-    # Model parameters
+    # Model parameters - UPDATED
     hidden_size = 256
-    n_layers = 3
-    dropout_prob = 0.2
-    unfreeze_layers = 3
+    n_layers = 2  # Reduced from 3 to 2
+    dropout_prob = 0.3  # Increased dropout
+    unfreeze_layers = 2  # Reduced from 3 to 2
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"Using device: {device}")
@@ -409,12 +418,13 @@ def main():
         unfreeze_layers=unfreeze_layers,
     ).to(device)
 
+    # Training parameters - UPDATED
     epochs = 100
-    lr = 5e-4  # Reduced from 5e-4
-    weight_decay = 1e-5
-    scheduler_step_size = int(epochs * 0.5)
-    patience = 7
-    save_every = 10
+    lr = 1e-4  # Reduced from 5e-4
+    weight_decay = 1e-4  # Increased regularization
+    scheduler_step_size = int(epochs * 0.3)  # Earlier decay
+    patience = 10  # Increased patience
+    save_every = 5  # More frequent saves
 
     # Create save directory
     save_dir = "crnn"
@@ -430,10 +440,11 @@ def main():
         model.parameters(),
         lr=lr,
         weight_decay=weight_decay,
+        eps=1e-8,  # Added for numerical stability
     )
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=scheduler_step_size, gamma=0.1
-    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+    )  # Changed to ReduceLROnPlateau
 
     print("Starting training...")
     # Training with early stopping and periodic saving
