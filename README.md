@@ -1,23 +1,40 @@
-# OCR System Overview
+# OCR System - Text Recognition
 
-## Datasets
+## Overview
+
+This OCR system uses a two-stage pipeline to recognize text from images:
+
+- **Text Detection**: YOLOv11 is used to detect text regions
+- **Text Recognition**: CRNN is used to recognize the content of the text
+
+## Dataset
 
 **Download Dataset**
-Access and download the dataset from this [Google Drive link](https://drive.google.com/file/d/1kUy2tuH-kKBlFCNA0a9sqD2TG4uyvBnV/view).
+Access and download the dataset from [Google Drive](https://drive.google.com/file/d/1kUy2tuH-kKBlFCNA0a9sqD2TG4uyvBnV/view).
 
 ---
 
 ## Processing Pipeline
 
 ```plaintext
-Input Image → Text Detection (YOLOv11) → Text Recognition (CRNN) → Final Text Output
+Input Image → Text Detection (YOLOv11) → Text Recognition (CRNN) → Text Output
 ```
 
 ---
 
-## Phase 1: Text Detection
+## System Requirements
 
-### Preprocessing
+### Environment Setup
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Stage 1: Text Detection
+
+### Data Preprocessing
 
 Convert XML annotations to YOLO format:
 
@@ -25,7 +42,7 @@ Convert XML annotations to YOLO format:
 python xml_to_yolo.py
 ```
 
-### Training YOLOv11
+### Train YOLOv11
 
 Start training the YOLOv11 detection model:
 
@@ -33,26 +50,44 @@ Start training the YOLOv11 detection model:
 python -m Text_detection.YOLOv11
 ```
 
+### YOLOv11 Results
+
+![YOLO Training Results](img/results.png)
+
 ---
 
-## Phase 2: Text Recognition
+## Stage 2: Text Recognition
 
-### Preprocessing
+### Data Preprocessing
 
-Prepare image–text pairs for training:
+Prepare image-text pairs for training:
 
 ```bash
 python prepare_crnn_data.py
 ```
 
----
+**Note:** This script processes the dataset into a CRNN-compatible format (images with corresponding labels only).
 
-_Note:_ This script processes the dataset into a format compatible with CRNN-based text recognition (image + corresponding label only).
-
-### Training CRNN
+### Train CRNN
 
 Start training the CRNN model:
 
 ```bash
 python -m Text_recognition.CRNN
+```
+
+### CRNN Results
+
+![CRNN Training Curve](img/training_curves.png)
+
+---
+
+## Using the System
+
+### Model Testing
+
+Run the test notebook to evaluate both models:
+
+```bash
+jupyter notebook test.ipynb
 ```
