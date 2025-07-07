@@ -30,6 +30,20 @@ Input Image → Text Detection (YOLOv11) → Text Recognition (CRNN) → Text Ou
 pip install -r requirements.txt
 ```
 
+### Troubleshooting
+
+If you encounter dependency conflicts (especially with Streamlit/protobuf), run:
+
+```bash
+python fix_environment.py
+```
+
+This script will automatically fix common issues including:
+
+- Protobuf version conflicts
+- Streamlit import errors
+- Missing dependencies
+
 ---
 
 ## Stage 1: Text Detection
@@ -84,10 +98,29 @@ python -m Text_recognition.CRNN
 
 ## Using the System
 
+### Web Interface (Recommended)
+
+Launch the interactive web interface for easy testing:
+
+```bash
+streamlit run app.py
+```
+
+This will open a web browser where you can:
+
+- Upload your own images
+- Adjust confidence thresholds
+- View detection and recognition results in real-time
+- See detailed results for each detected text region
+
 ### Model Testing
 
 Run the test notebook to evaluate both models:
 
 ```bash
-jupyter notebook test.ipynb
+test.ipynb
 ```
+
+## Update
+
+Because using CRNN as text recognition still bad, I will update to better model in future
