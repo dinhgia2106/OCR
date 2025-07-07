@@ -30,20 +30,6 @@ Input Image → Text Detection (YOLOv11) → Text Recognition (CRNN) → Text Ou
 pip install -r requirements.txt
 ```
 
-### Troubleshooting
-
-If you encounter dependency conflicts (especially with Streamlit/protobuf), run:
-
-```bash
-python fix_environment.py
-```
-
-This script will automatically fix common issues including:
-
-- Protobuf version conflicts
-- Streamlit import errors
-- Missing dependencies
-
 ---
 
 ## Stage 1: Text Detection
