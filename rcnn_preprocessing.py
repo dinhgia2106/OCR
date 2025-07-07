@@ -75,8 +75,14 @@ def build_vocabulary(labels):
     print(f"Vocab: {chars}")
     print(f"Vocab size: {vocab_size}")
     
-    # Create character to index and index to character mappings
-    char_to_idx = {char: idx + 1 for idx, char in enumerate(sorted(chars))}
+    # Create character to index and index to character mappings  
+    # Important: blank character should be at index 0 for CTC Loss
+    sorted_chars = sorted(chars)
+    blank_index = sorted_chars.index(blank_char)
+    # Move blank to front
+    sorted_chars = [blank_char] + [c for c in sorted_chars if c != blank_char]
+    
+    char_to_idx = {char: idx for idx, char in enumerate(sorted_chars)}
     idx_to_char = {index: char for char, index in char_to_idx.items()}
     
     # Find maximum label length for padding

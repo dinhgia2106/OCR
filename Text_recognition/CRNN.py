@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import timm
@@ -8,6 +8,7 @@ import time
 from rcnn_preprocessing import main as get_preprocessing_data, encode
 import os
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 class STRDataset(Dataset):
     def __init__(
@@ -32,7 +33,7 @@ class STRDataset(Dataset):
     def __getitem__(self, idx):
         label = self.labels[idx]
         img_path = self.img_paths[idx]
-        img = Image.open(img_path).convert("RGB")
+        img = Image.open(img_path).convert("L")  # Convert to grayscale directly
 
         if self.transform:
             img = self.transform(img)
@@ -79,8 +80,8 @@ class CRNN(nn.Module):
             nn.Linear(hidden_size * 2, vocab_size), nn.LogSoftmax(dim=2)
         )
 
+    @torch.autocast(device_type="cuda")
     def forward(self, x):
-        # Remove autocast from forward - it will be handled in training loop
         x = self.backbone(x)
         x = x.permute(0, 3, 1, 2)
         x = x.view(x.size(0), x.size(1), -1)  # Flatten the feature map
@@ -179,7 +180,7 @@ def save_checkpoint(model, optimizer, epoch, train_losses, val_losses, save_dir,
 def fit(
     model, train_loader, val_loader, criterion, optimizer, scheduler, device, epochs,
     save_dir, vocab_size, char_to_idx, chars, hidden_size, n_layers, dropout_prob,
-    scaler, patience=7, save_every=10
+    patience=7, save_every=10
 ):
     """
     Train the model with early stopping and periodic saving.
@@ -200,7 +201,7 @@ def fit(
         hidden_size: Hidden size of the model
         n_layers: Number of layers
         dropout_prob: Dropout probability
-        scaler: GradScaler for mixed precision training
+
         patience: Early stopping patience
         save_every: Save checkpoint every N epochs
         
@@ -225,33 +226,25 @@ def fit(
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
         
         for idx, (inputs, labels, labels_len) in enumerate(train_pbar):
-            optimizer.zero_grad()
-            
             inputs = inputs.to(device)
             labels = labels.to(device)
             labels_len = labels_len.to(device)
 
-            with autocast():
-                outputs = model(inputs)
+            optimizer.zero_grad()
 
-                logits_lens = torch.full(
-                    size=(outputs.size(1),),
-                    fill_value=outputs.size(0),
-                    dtype=torch.long,
-                ).to(device)
+            outputs = model(inputs)
 
-                loss = criterion(outputs, labels, logits_lens, labels_len)
+            logits_lens = torch.full(
+                size=(outputs.size(1),),
+                fill_value=outputs.size(0),
+                dtype=torch.long,
+            ).to(device)
 
-            # Scale loss before backward
-            scaler.scale(loss).backward()
-            
-            # Unscale before gradient clipping
-            scaler.unscale_(optimizer)
+            loss = criterion(outputs, labels, logits_lens, labels_len)
+
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
-            
-            # Step optimizer through scaler
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
 
             batch_train_losses.append(loss.item())
             
@@ -376,6 +369,88 @@ def create_dataloaders(preprocessing_data):
     return train_loader, val_loader, test_loader
 
 
+def plot_training_curves(train_losses, val_losses, save_dir):
+    """
+    Plot training and validation loss curves.
+    
+    Args:
+        train_losses: List of training losses
+        val_losses: List of validation losses  
+        save_dir: Directory to save the plot
+    """
+    plt.figure(figsize=(15, 5))
+    
+    # Training Loss
+    plt.subplot(1, 2, 1)
+    plt.plot(range(len(train_losses)), train_losses, 'b-', linewidth=2)
+    plt.title('Training Loss', fontsize=14)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # Validation Loss
+    plt.subplot(1, 2, 2) 
+    plt.plot(range(len(val_losses)), val_losses, 'orange', linewidth=2)
+    plt.title('Val Loss', fontsize=14)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = os.path.join(save_dir, 'training_curves.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    print(f"Training curves saved to {plot_path}")
+    plt.show()
+
+
+def load_best_model(save_dir, device):
+    """
+    Load the best saved model.
+    
+    Args:
+        save_dir: Directory containing the saved model
+        device: Device to load model on
+        
+    Returns:
+        tuple: (model, training_info)
+    """
+    best_model_path = os.path.join(save_dir, "best_model.pt")
+    
+    if not os.path.exists(best_model_path):
+        print(f"Best model not found at {best_model_path}")
+        return None, None
+        
+    checkpoint = torch.load(best_model_path, map_location=device)
+    
+    # Recreate model with saved parameters
+    model = CRNN(
+        vocab_size=checkpoint['vocab_size'],
+        hidden_size=checkpoint['hidden_size'],
+        n_layers=checkpoint['n_layers'],
+        dropout=checkpoint['dropout_prob'],
+        unfreeze_layers=3
+    )
+    
+    # Load model state
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
+    model.eval()
+    
+    training_info = {
+        'epoch': checkpoint['epoch'],
+        'train_losses': checkpoint['train_losses'],
+        'val_losses': checkpoint['val_losses'],
+        'vocab_size': checkpoint['vocab_size'],
+        'char_to_idx': checkpoint['char_to_idx'],
+        'chars': checkpoint['chars']
+    }
+    
+    print(f"Best model loaded from epoch {checkpoint['epoch'] + 1}")
+    return model, training_info
+
+
 def main():
     """Main function to run the CRNN training pipeline."""
     # Get preprocessed data
@@ -410,18 +485,15 @@ def main():
 
     # Training parameters
     epochs = 100
-    lr = 5e-5
+    lr = 5e-4
     weight_decay = 1e-5
     scheduler_step_size = int(epochs * 0.5)
-    patience = 7
+    patience = 10
     save_every = 10
 
     # Create save directory
     save_dir = "crnn"
     os.makedirs(save_dir, exist_ok=True)
-
-    # Initialize GradScaler for mixed precision training
-    scaler = GradScaler()
 
     # Loss, optimizer, and scheduler
     criterion = nn.CTCLoss(
@@ -443,7 +515,7 @@ def main():
     train_losses, val_losses = fit(
         model, train_loader, val_loader, criterion, optimizer, scheduler, device, epochs,
         save_dir, vocab_size, char_to_idx, chars, hidden_size, n_layers, dropout_prob,
-        scaler, patience=patience, save_every=save_every
+        patience=patience, save_every=save_every
     )
 
     # Evaluation
@@ -463,6 +535,31 @@ def main():
     )
 
     print(f"Training completed. Models saved in {save_dir}")
+    
+    print("\n" + "="*60)
+    print("CREATING EVALUATION PLOTS AND FINAL ASSESSMENT")
+    print("="*60)
+    
+    # Plot training curves
+    plot_training_curves(train_losses, val_losses, save_dir)
+    
+    # Load and evaluate best model
+    print("\nLoading best model for final evaluation...")
+    best_model, training_info = load_best_model(save_dir, device)
+    
+    if best_model is not None:
+        # Evaluate best model on all datasets
+        print("\nEvaluating best model on all datasets:")
+        print("-" * 40)
+        
+        best_val_loss = evaluate(best_model, val_loader, criterion, device)
+        best_test_loss = evaluate(best_model, test_loader, criterion, device)
+        
+        print(f"Best Model Results:")
+        print(f"  Validation Loss: {best_val_loss:.4f}")
+        print(f"  Test Loss: {best_test_loss:.4f}")
+        print(f"  Best epoch: {training_info['epoch'] + 1}")
+        print(f"  Vocabulary size: {training_info['vocab_size']}")
 
     return model, train_losses, val_losses
 
